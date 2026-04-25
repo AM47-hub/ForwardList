@@ -1,43 +1,250 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, make_response
 import re
+import json
 from datetime import datetime, timedelta
 import os
 
+# --- GLOBAL CONSTANT BLOCK ---
+
+REPAIRS = {
+    'one': '1', 'won': '1', 'two': '2', 'to': '2',
+    'three': '3', 'four': '4', 'for': '4',
+    'five': '5', 'six': '6',
+    'seven': '7', 'eight': '8', 'ate': '8',
+    'nine': '9', 'zero': '0', 'none':'0', 'nill':'0',
+    'dash': '-'
+}
+
+SUFFIX = {
+    'Road': 'Rd.', 'Street': 'St.', 'Crescent': 'Cres.', 
+    'Place': 'Pl.', 'Avenue': 'Ave.', 'Lane': 'Ln.', 
+    'Highway': 'Hwy.', 'Way': 'Wy.','Row': 'Rw.', 'Terrace': 'Tce.', 'Drive': 'Dr.'
+}
+
+# Digitize Natural Language
+
+ENCLITICS = {"st","nd","rd","th"}
+
+ORDINALS = {
+    "first": 1,"second": 2,"third": 3,"fourth": 4,"fifth": 5,
+    "sixth": 6,"seventh": 7,"eighth": 8,"ninth": 9,"tenth": 10
+}
+
+DAY_IDX = {
+      'mon': 0, 'monday': 0,
+      'tue': 1, 'tuesday': 1,
+      'wed': 2, 'wednesday': 2,
+      'thu': 3, 'thursday': 3,
+       'fri': 4, 'friday': 4,
+       'sat': 5, 'saturday': 5,
+       'sun': 6, 'sunday': 6
+}
+
+MTH_IDX = {
+    "jan": 1,"feb": 2,"mar": 3,"apr": 4,"may": 5,"jun": 6,
+    "jul": 7,"aug": 8,"sep": 9,"oct": 10,"nov": 11,"dec": 12
+}
+
 app = Flask(__name__)
 
-def calculate_date(text, anchor_str, status_str):
-    days_map = {"mon":0, "tue":1, "wed":2, "thu":3, "fri":4, "sat":5, "sun":6}
-    anchor = datetime.strptime(anchor_str, '%Y-%m-%d')
-    status = datetime.strptime(status_str, '%Y-%m-%d')
-    
-    match = re.search(r'(this|next)?\s*(monday|tuesday|wednesday|thursday|friday|saturday|sunday)', text.lower())
-    if not match: return None
-    
-    keyword, target_day = match.group(1), match.group(2)[:3]
-    target_idx, anchor_idx = days_map[target_day], anchor.weekday()
+@app.route('/ping', methods=['GET', 'HEAD'])
+def health_check():
+    return make_response("Ready", 200)
 
-    days_ahead = (target_idx - anchor_idx) % 7
-    if days_ahead == 0: days_ahead = 7
-    
-    viewing_date = anchor + timedelta(days=days_ahead)
-    if keyword == "next" and days_ahead <= 3:
-        viewing_date += timedelta(days=7)
+def fast_parse(text):
+    keywords = [
+        "flat", "number", "beside", "suburb", "type", "rent", "rooms", 
+        "available", "viewing", "from", "until", "agency", 
+        "person", "mobile", "comments"
+    ]
 
-    return viewing_date
+    delimit = re.compile(r'\b(' + '|'.join(keywords) + r')\b', re.I)
+    chunks = list(delimit.finditer(text))
+
+    raw_vals = {k: "" for k in keywords}
+    for i in range(len(chunks)):
+        start = chunks[i].end()
+        if i + 1 < len(chunks):
+            end = chunks[i+1].start()
+        else:
+            end = len(text)
+        raw_vals[chunks[i].group(1).lower()] = text[start:end].strip()
+    return raw_vals
+
+def quick_addr(tokens):
+    unit = tokens.get('flat', '').replace(" ", "").upper()
+    numb = tokens.get('number', '').replace(" ", "").upper()
+
+    if unit:
+        location = f"U{unit}/{numb}"
+    else:
+        location = numb
+
+    # Standardise: "The" from "The Kingsway"
+    beside = re.sub(r'^the\s+kingsway', 'Kingsway', tokens.get('beside', ''), flags=re.I)
+
+    full_addr = f"{location} {beside} {tokens.get('suburb', '')}"
+    full_addr = re.sub(r'\s+', ' ', full_addr).strip().title()
+
+    # Apply suffixes using word boundaries to prevent "Broadway" -> "BRd.way"
+    for full_word, abbrev in SUFFIX.items():
+        full_addr = re.sub(rf'\b{full_word}\b', abbrev, full_addr, flags=re.I)
+    return full_addr
 
 @app.route('/process', methods=['POST'])
 def process():
-    data = request.json
-    res_date = calculate_date(data.get('text', ''), data.get('anchor'), data.get('status'))
-    
-    if not res_date: return jsonify({"error": "No date found"}), 400
-    
-    status_dt = datetime.strptime(data.get('status'), '%Y-%m-%d')
-    if res_date < status_dt:
-        return jsonify({"status": "DELETE"})
+    try:
+        PassOut = request.get_json(force=True)
+        raw = str(PassOut.get('text', '')).replace('\xa0', ' ').strip()
+        if not raw: 
+            return make_response(json.dumps([]), 200)
 
-    return jsonify({"viewing_date": res_date.strftime('%d/%m/%Y'), "status": "LIVE"})
+        # --- STATION 1: REPAIR & DIGITIZE INDIVIDUAL NOTES ---
+
+        initial_prep = []
+
+        # FIX 1: Explicitly split raw into notes
+        for note in [s.strip() for s in raw.split('|') if 'Content:' in s]:
+            try:
+                key_values = note.split('Content:', 1)
+                if len(key_values) < 2:
+                    continue
+
+                meta = key_values[0]
+                body = key_values[1]
+
+                raw_status = re.search(r'Status:\s*(\d{4}-\d{2}-\d{2})', meta, re.I)
+                raw_anchor = re.search(r'Anchor:\s*([\d\-T:+]+)', meta, re.I)
+
+                if raw_status and raw_anchor:
+
+                    # Parse tokens
+                    tokens = fast_parse(body)
+
+                    # Repairs logic
+                    for key in tokens:
+                        val = tokens[key]
+                        for word, digit in REPAIRS.items():
+                            val = re.sub(rf'\b{word}\b', digit, val, flags=re.I)
+                        tokens[key] = val
+
+                    initial_prep.append({
+                        "anchor": datetime.fromisoformat(raw_anchor.group(1).split('T')[0]),
+                        "status": raw_status.group(1),
+                        "tokens": tokens
+                    })
+            except: continue
+
+        # --- STATION 2: COALESCE INTO UNIQUE LISTINGS ---
+        initial_prep.sort(key=lambda x: x["anchor"])
+        unique_listings = {}
+        for item in initial_prep:
+            addr_key = quick_addr(item["tokens"])
+
+            if addr_key not in unique_listings:
+                unique_listings[addr_key] = {
+                    "tokens": item["tokens"],
+                    "anchor_dt": item["anchor"].date(),
+                    "status_dt": datetime.strptime(item["status"], '%Y-%m-%d').date()
+                }
+            else:
+                # Waterfall merge tokens
+                for k, v in item["tokens"].items():
+                    if v.strip():
+                        unique_listings[addr_key]["tokens"][k] = v
+                unique_listings[addr_key]["anchor_dt"] = item["anchor"].date()
+
+        # --- STATION 3: FINAL DATE LOGIC & ASSEMBLY ---
+        final_results = []
+        for addr_key, record in unique_listings.items():
+            tokens, anchor_dt, status_dt = record["tokens"], record["anchor_dt"], record["status_dt"]
+            view_string = tokens.get('viewing', '').lower()
+            view_date = None
+
+            # --- DATE LOGIC ---
+            
+            # Direct Numeric (Robust Version with Rollover)
+            date_actual = re.search(r'(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?', view_string)
+            if date_actual:
+                v_day = int(date_actual.group(1))
+                v_mth = int(date_actual.group(2))
+
+                if date_actual.group(3):
+                    # Year is provided: Handle century rollover only
+                    v_yr = int(date_actual.group(3))
+                    if v_yr < 100: v_yr += 2000
+                    try:
+                        view_date = datetime(v_yr, v_mth, v_day).date()
+                    except ValueError:
+                        pass
+                else:
+                    # Year is missing: Handle Month/Year Rollover logic
+                    v_yr = anchor_dt.year
+                    try:
+                        temp_date = datetime(v_yr, v_mth, v_day).date()
+                        # If the date is before the anchor, it's likely next year
+                        if temp_date < anchor_dt:
+                            temp_date = datetime(v_yr + 1, v_mth, v_day).date()
+                        view_date = temp_date
+                    except ValueError:
+                        pass
+
+            # Absolute Names
+            if not view_date:
+                encl_pat = "|".join(ENCLITICS)
+                mth_pat = "|".join(MTH_IDX.keys())
+                mth_ID = re.search(rf'\b(\d+)(?:{encl_pat})?\s*(?:of\s*)?\b({mth_pat})[a-z]*\b', view_string, re.I)
+                if mth_ID:
+                    v_day = int(mth_ID.group(1)) 
+                    v_mth = MTH_IDX[mth_ID.group(2).lower()]
+                    v_yr = anchor_dt.year
+                    try:
+                        temp_date = datetime(v_yr, v_mth, v_day).date()
+                        # Rollover: If the parsed date is before the anchor, assume next year
+                        if temp_date < anchor_dt:
+                            temp_date = datetime(v_yr + 1, v_mth, v_day).date()
+                        view_date = temp_date
+                    except ValueError:
+                        pass
+
+            # Relative Logic
+            if not view_date:
+                if "tomorrow" in view_string:
+                    view_date = anchor_dt + timedelta(days=1)
+                elif any(w in view_string for w in ["today", "this morning", "this afternoon"]):
+                    view_date = anchor_dt
+                else:
+                    day_pat = "|".join(DAY_IDX.keys())
+                    rel_date = re.search(rf'\b(this|next)?\s*\b({day_pat})\b', view_string, re.I)
+                    if rel_date:
+                        pref, DoW = rel_date.groups()
+                        target_weekday = DAY_IDX[DoW.lower()]
+                        days_ahead = (target_weekday - anchor_dt.weekday()) % 7
+                        if days_ahead == 0: days_ahead = 7
+                        view_date = anchor_dt + timedelta(days=days_ahead)
+                        if pref == 'next' and days_ahead <= 2: 
+                            view_date += timedelta(days=7)
+
+            if view_date:
+                final_results.append({
+                    "viewDate": view_date.strftime('%d/%m/%Y'),
+                    "address": addr_key
+                    "DayFlag": "LIVE" if view_date >= status_dt else "PAST",
+                    "sortDate": view_date.strftime('%Y/%m/%d'),
+                })
+            # Check for "must book" status
+            elif re.search(r'must\s+book', view_string, re.I):
+                final_results.append({
+                    "viewDate": "MUST BOOK",
+                    "address": addr_key
+                    "DayFlag": "LIVE",
+                    "sortDate": "1901/01/01",
+                })
+
+        return make_response(json.dumps(final_results), 200, {"Content-Type": "application/json"})
+
+    except Exception as e:
+        return make_response(json.dumps({"error": str(e)}), 500)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
