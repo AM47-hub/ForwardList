@@ -222,7 +222,7 @@ def process():
                         days_ahead = (target_weekday - anchor_dt.weekday()) % 7
                         if days_ahead == 0: days_ahead = 7
                         view_date = anchor_dt + timedelta(days=days_ahead)
-                        if pref == 'next' and days_ahead <= 2: 
+                        if pref == 'next' and anchor_dt.weekday() < target_weekday: 
                             view_date += timedelta(days=7)
 
             if view_date:
