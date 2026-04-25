@@ -228,17 +228,17 @@ def process():
             if view_date:
                 final_results.append({
                     "viewDate": view_date.strftime('%d/%m/%Y'),
-                    "address": addr_key
+                    "address": addr_key,
                     "DayFlag": "LIVE" if view_date >= status_dt else "PAST",
-                    "sortDate": view_date.strftime('%Y/%m/%d'),
+                    "sortDate": view_date.strftime('%Y/%m/%d')
                 })
             # Check for "must book" status
             elif re.search(r'must\s+book', view_string, re.I):
                 final_results.append({
                     "viewDate": "MUST BOOK",
-                    "address": addr_key
+                    "address": addr_key,
                     "DayFlag": "LIVE",
-                    "sortDate": "1901/01/01",
+                    "sortDate": "1901/01/01"
                 })
 
         return make_response(json.dumps(final_results), 200, {"Content-Type": "application/json"})
