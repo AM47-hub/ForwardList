@@ -219,12 +219,16 @@ def process():
                             view_date += timedelta(days=7)
 
             if view_date:
-                final_results.append({
-                    "viewDate": view_date.strftime('%d/%m/%Y'),
-                    "address": addr_key,
-                    "DayFlag": "LIVE" if view_date >= status_dt else "PAST",
-                    "sortDate": view_date.strftime('%Y/%m/%d')
-                })
+                day_flag = "LIVE" if view_date >= status_dt else "PAST"
+                if day_flag != "PAST":
+                    final_results.append({
+                        "viewDate": view_date.strftime('%d/%m/%Y'),
+                        "address": addr_key,
+                        "DayFlag": day_flag,
+    
+    
+                        "sortDate": view_date.strftime('%Y/%m/%d')
+                    })
             # Check for "must book" status
             elif re.search(r'must\s+book', view_string, re.I):
                 final_results.append({
