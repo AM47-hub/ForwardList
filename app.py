@@ -48,10 +48,10 @@ MTH_IDX = {
 app = Flask(__name__)
 
 @app.route('/ping', methods=['GET', 'HEAD'])
-def health_check():
+def wakeup():
     return make_response("Ready", 200)
 
-def fast_parse(text):
+def fast_parse(dictated):
     keywords = [
         "flat", "number", "beside", "suburb", "type", "rent", "rooms", 
         "available", "viewing", "from", "until", "agency", 
@@ -59,7 +59,7 @@ def fast_parse(text):
     ]
 
     delimit = re.compile(r'\b(' + '|'.join(keywords) + r')\b', re.I)
-    chunks = list(delimit.finditer(text))
+    chunks = list(delimit.finditer(dictated))
 
     raw_vals = {k: "" for k in keywords}
     for i in range(len(chunks)):
@@ -67,22 +67,17 @@ def fast_parse(text):
         if i + 1 < len(chunks):
             end = chunks[i+1].start()
         else:
-            end = len(text)
-        raw_vals[chunks[i].group(1).lower()] = text[start:end].strip()
+            end = len(dictated)
+        raw_vals[chunks[i].group(1).lower()] = dictated[start:end].strip()
     return raw_vals
 
 def quick_addr(tokens):
     unit = tokens.get('flat', '').replace(" ", "").upper()
     numb = tokens.get('number', '').replace(" ", "").upper()
-
-    if unit:
-        location = f"U{unit}/{numb}"
-    else:
-        location = numb
+    location = f"U{unit}/{numb}" if unit else numb
 
     # Standardise: "The" from "The Kingsway"
     beside = re.sub(r'^the\s+kingsway', 'Kingsway', tokens.get('beside', ''), flags=re.I)
-
     full_addr = f"{location} {beside} {tokens.get('suburb', '')}"
     full_addr = re.sub(r'\s+', ' ', full_addr).strip().title()
 
@@ -95,18 +90,19 @@ def quick_addr(tokens):
 def process():
     try:
         PassOut = request.get_json(force=True)
-        raw = str(PassOut.get('text', '')).replace('\xa0', ' ').strip()
+        payload = PassOut.get('dictated', '')
+        raw = str(payload).replace('\xa0', ' ').strip()
         if not raw: 
             return make_response(json.dumps([]), 200)
 
         # --- STATION 1: REPAIR & DIGITIZE INDIVIDUAL NOTES ---
-
         initial_prep = []
 
-        # FIX 1: Explicitly split raw into notes
-        for note in [s.strip() for s in raw.split('|') if 'Content:' in s]:
+        # Explicitly split raw into notes
+        notes = [s.strip() for s in raw.split('|') if 'Content:' in s]:
+        for text in notes:
             try:
-                key_values = note.split('Content:', 1)
+                key_values = text.split('Content:', 1)
                 if len(key_values) < 2:
                     continue
 
@@ -118,7 +114,7 @@ def process():
 
                 if raw_status and raw_anchor:
 
-                    # Parse tokens
+                    # 1. Parse tokens
                     tokens = fast_parse(body)
 
                     # Repairs logic
@@ -140,7 +136,6 @@ def process():
         unique_listings = {}
         for item in initial_prep:
             addr_key = quick_addr(item["tokens"])
-
             if addr_key not in unique_listings:
                 unique_listings[addr_key] = {
                     "tokens": item["tokens"],
@@ -162,13 +157,11 @@ def process():
             view_date = None
 
             # --- DATE LOGIC ---
-            
             # Direct Numeric (Robust Version with Rollover)
             date_actual = re.search(r'(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?', view_string)
             if date_actual:
                 v_day = int(date_actual.group(1))
                 v_mth = int(date_actual.group(2))
-
                 if date_actual.group(3):
                     # Year is provided: Handle century rollover only
                     v_yr = int(date_actual.group(3))
