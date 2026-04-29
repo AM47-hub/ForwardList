@@ -99,7 +99,7 @@ def process():
         initial_prep = []
 
         # Explicitly split raw into notes
-        notes = [s.strip() for s in raw.split('|') if 'Content:' in s]:
+        notes = [s.strip() for s in raw.split('|') if 'Content:' in s]
         for text in notes:
             try:
                 key_values = text.split('Content:', 1)
