@@ -234,6 +234,8 @@ def process():
                     "sortDate": "1901/01/01"
                 })
 
+        final_results.sort(key=lambda x: x["sortDate"])
+        
         return make_response(json.dumps(final_results), 200, {"Content-Type": "application/json"})
 
     except Exception as e:
