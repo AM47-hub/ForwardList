@@ -17,7 +17,7 @@ REPAIRS = {
     'twenty': '20', 'thirty': '30', 'fourty':'40', 'fifty':'50',
     '\u002d': '-', '\u2010': '-', '\u2011': '-', '\u2012': '-',
     '\u2013': '-', '\u2014': '-', '\u2212': '-',
-    'dash': '-'
+    'dash': '-', 'hyphen': '-'
 }
 
 SUFFIX = {
@@ -147,8 +147,14 @@ def process():
         # --- STATION 2: COALESCE INTO UNIQUE LISTINGS ---
         initial_prep.sort(key=lambda x: x["anchor"])
         unique_listings = {}
+        
+        print("\n--- DEBUG: STARTING WATERFALL MERGE ---")
+        
         for item in initial_prep:
             addr_key = quick_addr(item["tokens"])
+            
+            print(f"Processing Key: [{addr_key}] | Viewing Token: '{item['tokens']['viewing']}'")
+            
             if addr_key not in unique_listings:
                 unique_listings[addr_key] = {
                     "tokens": item["tokens"],
@@ -157,10 +163,17 @@ def process():
                 }
             else:
                 # Waterfall merge tokens
+                print(f"MATCH FOUND: Merging into [{addr_key}]")
+                
                 for k, v in item["tokens"].items():
                     if v.strip():
                         unique_listings[addr_key]["tokens"][k] = v
                 unique_listings[addr_key]["anchor_dt"] = item["anchor"].date()
+
+                print("\n--- DEBUG: FINAL UNIQUE LISTINGS ---") 
+                for k, v in unique_listings.items():
+                    print(f"Key: {k} -> Final Viewing Token: {v['tokens']['viewing']}")
+                print("--------------------------------------\n")
 
         # --- STATION 3: FINAL DATE LOGIC & ASSEMBLY ---
         final_results = []
