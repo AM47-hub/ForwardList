@@ -79,7 +79,6 @@ def fast_parse(dictated):
 def quick_addr(tokens):
     unit = tokens.get('flat', '').replace(" ", "").upper()
     numb = tokens.get('number', '').replace(" ", "").upper()
-    
     if unit:
         # If 'flat' starts with number, add the "U"
         if unit[0].isdigit():
@@ -118,26 +117,21 @@ def process():
                 key_values = text.split('Content:', 1)
                 if len(key_values) < 2:
                     continue
-
                 meta = key_values[0]
                 body = key_values[1]
-
                 raw_status = re.search(r'Status:\s*(\d{4}-\d{2}-\d{2})', meta, re.I)
                 raw_anchor = re.search(r'Anchor:\s*([\d\-T:+]+)', meta, re.I)
-
                 if raw_status and raw_anchor:
-
                     # 1. Parse tokens
                     tokens = fast_parse(body)
-
                     # Repairs logic
                     for key in tokens:
                         val = tokens[key]
                         for word, digit in REPAIRS.items():
                             val = re.sub(rf'\b{word}\b', digit, val, flags=re.I)
                         tokens[key] = val
-
                     initial_prep.append({
+                        "timestamp": datetime.fromisoformat(raw_anchor.group(1)),
                         "anchor": datetime.fromisoformat(raw_anchor.group(1).split('T')[0]),
                         "status": raw_status.group(1),
                         "tokens": tokens
@@ -145,16 +139,12 @@ def process():
             except: continue
 
         # --- STATION 2: COALESCE INTO UNIQUE LISTINGS ---
-        initial_prep.sort(key=lambda x: x["anchor"])
+        initial_prep.sort(key=lambda x: x["timestamp"])
         unique_listings = {}
-        
-        print("\n--- DEBUG: STARTING WATERFALL MERGE ---")
-        
+        # print("\n--- DEBUG: STARTING WATERFALL MERGE ---")
         for item in initial_prep:
             addr_key = quick_addr(item["tokens"])
-            
-            print(f"Processing Key: [{addr_key}] | Viewing Token: '{item['tokens']['viewing']}'")
-            
+            # print(f"Processing Key: [{addr_key}] | Viewing Token: '{item['tokens']['viewing']}'")
             if addr_key not in unique_listings:
                 unique_listings[addr_key] = {
                     "tokens": item["tokens"],
@@ -163,17 +153,17 @@ def process():
                 }
             else:
                 # Waterfall merge tokens
-                print(f"MATCH FOUND: Merging into [{addr_key}]")
+                # print(f"MATCH FOUND: Merging into [{addr_key}]")
                 
                 for k, v in item["tokens"].items():
                     if v.strip():
                         unique_listings[addr_key]["tokens"][k] = v
                 unique_listings[addr_key]["anchor_dt"] = item["anchor"].date()
 
-                print("\n--- DEBUG: FINAL UNIQUE LISTINGS ---") 
-                for k, v in unique_listings.items():
-                    print(f"Key: {k} -> Final Viewing Token: {v['tokens']['viewing']}")
-                print("--------------------------------------\n")
+                # print("\n--- DEBUG: FINAL UNIQUE LISTINGS ---") 
+                # for k, v in unique_listings.items():
+                    # print(f"Key: {k} -> Final Viewing Token: {v['tokens']['viewing']}")
+                # print("--------------------------------------\n")
 
         # --- STATION 3: FINAL DATE LOGIC & ASSEMBLY ---
         final_results = []
@@ -181,7 +171,6 @@ def process():
             tokens, anchor_dt, status_dt = record["tokens"], record["anchor_dt"], record["status_dt"]
             view_string = tokens.get('viewing', '').lower()
             view_date = None
-
             # --- DATE LOGIC ---
             # Direct Numeric (Robust Version with Rollover)
             date_actual = re.search(r'(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?', view_string)
@@ -212,13 +201,10 @@ def process():
             if not view_date:
                 encl_pat = "|".join(ENCLITICS)
                 mth_pat = "|".join(MTH_IDX.keys())
-                
                 # Date Pattern A: "22nd of May"
                 mth_ID_A = re.search(rf'\b(\d+)(?:{encl_pat})?\s*(?:of\s*)?\b({mth_pat})[a-z]*\b', view_string, re.I)
-                
                 # Date Pattern B: "May 22nd"
                 mth_ID_B = re.search(rf'\b({mth_pat})[a-z]*\s*(\d+)(?:{encl_pat})?\b', view_string, re.I)
-    
                 if mth_ID_A:
                     v_day = int(mth_ID_A.group(1))
                     v_mth = MTH_IDX[mth_ID_A.group(2).lower()]
@@ -264,8 +250,6 @@ def process():
                         "viewDate": view_date.strftime('%d/%m/%Y'),
                         "address": addr_key,
                         "DayFlag": day_flag,
-    
-    
                         "sortDate": view_date.strftime('%Y/%m/%d')
                     })
             # Check for "must book" status
@@ -278,7 +262,6 @@ def process():
                 })
 
         final_results.sort(key=lambda x: x["sortDate"])
-        
         return make_response(json.dumps(final_results), 200, {"Content-Type": "application/json"})
 
     except Exception as e:
