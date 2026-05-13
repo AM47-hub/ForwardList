@@ -5,49 +5,62 @@ from datetime import datetime, timedelta
 import os
 
 # --- GLOBAL CONSTANT BLOCK ---
-
-REPAIRS = {
+# Digitize Natural Language
+CARDINALS = {
     'one': '1', 'won': '1', 'two': '2', 'to': '2',
     'three': '3', 'four': '4', 'for': '4',
     'five': '5', 'six': '6',
     'seven': '7', 'eight': '8', 'ate': '8',
-    'nine': '9', 'zero': '0', 'none':'0', 'nill':'0',
+    'nine': '9', 'ten': '10', 'zero': '0', 'none':'0', 'nill':'0',
     'eleven': '11', 'twelve': '12', 'thirteen': '13', 'fourteen': '14',
     'fifteen': '15', 'sixteen': '16', 'seventeen': '17', 'eighteen': '18', 'nineteen': '19',
-    'twenty': '20', 'thirty': '30', 'fourty':'40', 'fifty':'50',
+    'twenty': '20', 'thirty': '30', 'forty':'40', 'fifty':'50',
     '\u002d': '-', '\u2010': '-', '\u2011': '-', '\u2012': '-',
     '\u2013': '-', '\u2014': '-', '\u2212': '-',
-    'dash': '-', 'hyphen': '-'
+    'dash': '-', '–': '-', '—': '-', 'hyphen': '-'
 }
 
+ORDINALS = {
+    "first": 1,"second": 2,"third": 3,"fourth": 4,"fifth": 5,
+    "sixth": 6,"seventh": 7,"eighth": 8,"ninth": 9,"tenth": 10,
+    "eleventh": 11,"twelveth": 12,"thirteenth": 13,"fourteenth": 14,"fifteenth": 15,
+    "sixteenth": 16,"seventeenth": 17,"eighteenth": 18,"ninteenth": 19,
+    "twentieth": 20, "thirtieth": 30, "fortieth": 40, "fiftieth": 50
+}
+
+ENCLITICS = {"st","nd","rd","th"}
+
+ENCLITIC_MAP = {
+     1: "st", 2: "nd", 3: "rd", 4: "th", 5: "th",
+     6: "th", 7: "th", 8: "th", 9: "th", 10: "th",
+}
+
+# Address abbreviations
 SUFFIX = {
     'Road': 'Rd.', 'Street': 'St.', 'Crescent': 'Cres.', 
     'Place': 'Pl.', 'Avenue': 'Ave.', 'Lane': 'Ln.', 
     'Highway': 'Hwy.', 'Way': 'Wy.','Row': 'Rw.', 'Terrace': 'Tce.', 'Drive': 'Dr.'
 }
 
-# Digitize Natural Language
-
-ENCLITICS = {"st","nd","rd","th"}
-
-ORDINALS = {
-    "first": 1,"second": 2,"third": 3,"fourth": 4,"fifth": 5,
-    "sixth": 6,"seventh": 7,"eighth": 8,"ninth": 9,"tenth": 10
-}
-
 DAY_IDX = {
-      'mon': 0, 'monday': 0,
-      'tue': 1, 'tuesday': 1,
-      'wed': 2, 'wednesday': 2,
-      'thu': 3, 'thursday': 3,
-       'fri': 4, 'friday': 4,
-       'sat': 5, 'saturday': 5,
-       'sun': 6, 'sunday': 6
+    'mon': 0, 'monday': 0,
+    'tue': 1, 'tuesday': 1,
+    'wed': 2, 'wednesday': 2,
+    'thu': 3, 'thursday': 3,
+    'fri': 4, 'friday': 4,
+    'sat': 5, 'saturday': 5,
+    'sun': 6, 'sunday': 6
 }
 
 MTH_IDX = {
     "jan": 1,"feb": 2,"mar": 3,"apr": 4,"may": 5,"jun": 6,
     "jul": 7,"aug": 8,"sep": 9,"oct": 10,"nov": 11,"dec": 12
+}
+
+KEYWORDS = {
+    "flat", "number", "beside", "suburb", "type", "rent", "rooms", 
+    "available", "viewing", "from", "until", "agency", 
+    "person", "mobile", "comments"
 }
 
 app = Flask(__name__)
@@ -56,17 +69,10 @@ app = Flask(__name__)
 def wakeup():
     return make_response("Ready", 200)
 
-def fast_parse(dictated):
-    keywords = [
-        "flat", "number", "beside", "suburb", "type", "rent", "rooms", 
-        "available", "viewing", "from", "until", "agency", 
-        "person", "mobile", "comments"
-    ]
-
-    delimit = re.compile(r'\b(' + '|'.join(keywords) + r')\b', re.I)
+def initial_parse(dictated):
+    delimit = re.compile(r'\b(' + '|'.join(KEYWORDS) + r')\b', re.I)
     chunks = list(delimit.finditer(dictated))
-
-    raw_vals = {k: "" for k in keywords}
+    raw_vals = {k: "" for k in KEYWORDS}
     for i in range(len(chunks)):
         start = chunks[i].end()
         if i + 1 < len(chunks):
@@ -76,7 +82,7 @@ def fast_parse(dictated):
         raw_vals[chunks[i].group(1).lower()] = dictated[start:end].strip()
     return raw_vals
 
-def quick_addr(tokens):
+def repair_addr(tokens):
     unit = tokens.get('flat', '').replace(" ", "").upper()
     numb = tokens.get('number', '').replace(" ", "").upper()
     if unit:
@@ -88,7 +94,7 @@ def quick_addr(tokens):
     else:
         location = numb
 
-    # Standardise: "The" from "The Kingsway"
+    # Standardize 'beside' tokens
     beside = re.sub(r'^the\s+kingsway', 'Kingsway', tokens.get('beside', ''), flags=re.I)
     full_addr = f"{location} {beside} {tokens.get('suburb', '')}"
     full_addr = re.sub(r'\s+', ' ', full_addr).strip().title()
@@ -117,19 +123,64 @@ def process():
                 key_values = text.split('Content:', 1)
                 if len(key_values) < 2:
                     continue
+
                 meta = key_values[0]
                 body = key_values[1]
+
                 raw_status = re.search(r'Status:\s*(\d{4}-\d{2}-\d{2})', meta, re.I)
                 raw_anchor = re.search(r'Anchor:\s*([\d\-T:+]+)', meta, re.I)
+
                 if raw_status and raw_anchor:
-                    # 1. Parse tokens
-                    tokens = fast_parse(body)
-                    # Repairs logic
+                    tokens = initial_parse(body)
+
+                    # Global Cardinal Repairs
                     for key in tokens:
                         val = tokens[key]
-                        for word, digit in REPAIRS.items():
+                        for word, digit in CARDINALS.items():
                             val = re.sub(rf'\b{word}\b', digit, val, flags=re.I)
                         tokens[key] = val
+
+                    # Targeted Ordinal Repair (Date Fields only)
+                    for key in ['available', 'viewing']:
+                        val = tokens.get(key, '')
+                        if not val: continue
+                        # Remove hyphens, "the", and "of"
+                        val = val.replace('-', ' ')
+                        val = re.sub(rf'\b(the|of)\b', '', val, flags=re.I)
+                        val = re.sub(r'\s+', ' ', val).strip()
+
+                        # Identify hybrid string (e.g., "20 third")
+                        isHybrid = rf"\b(20|30)\s+({'|'.join(ORDINALS.keys())})\b"
+
+                        def convert_Hybrid(match):
+                            tens_val = int(match.group(1))
+                            units_Ordinal = match.group(2).lower()
+
+                            # Convert units_part to integer if Ordinal
+                            units_val = int(ORDINALS.get(units_Ordinal, 0))
+                            total = tens_val + units_val
+
+                            # Attach enclitic
+                            if 11 <= (total % 100) <= 13:
+                                suffix = "th"
+                            else:
+                                suffix = ENCLITIC_MAP.get(total % 10, "th")
+                            return f"{total}{suffix}"
+
+                        val = re.sub(isHybrid, convert_Hybrid, val, flags=re.I)
+
+                        # If not, simple Ordinal conversion (e.g., "sixth")
+                        for word, digit in ORDINALS.items():
+                        # Convert to int for the suffix check, or use a map
+                        d_int = int(digit)
+                        if 11 <= (d_int % 100) <= 13:
+                            suffix = "th"
+                        else:
+                            suffix =ENCLITIC_MAP.get(d_int % 10, "th")
+                        val = re.sub(rf'\b{word}\b', f"{d_int}{suffix}", val, flags=re.I)
+                        
+                        tokens[key] = val
+
                     initial_prep.append({
                         "timestamp": datetime.fromisoformat(raw_anchor.group(1)),
                         "anchor": datetime.fromisoformat(raw_anchor.group(1).split('T')[0]),
@@ -138,13 +189,12 @@ def process():
                     })
             except: continue
 
-        # --- STATION 2: COALESCE INTO UNIQUE LISTINGS ---
-        initial_prep.sort(key=lambda x: x["timestamp"])
+        # --- STATION 2: WATERFALL MERGE UNIQUE LISTINGS ---
+        initial_prep.sort(key=lambda x: x["anchor"])
         unique_listings = {}
-        # print("\n--- DEBUG: STARTING WATERFALL MERGE ---")
+
         for item in initial_prep:
-            addr_key = quick_addr(item["tokens"])
-            # print(f"Processing Key: [{addr_key}] | Viewing Token: '{item['tokens']['viewing']}'")
+            addr_key = repair_addr(item["tokens"])
             if addr_key not in unique_listings:
                 unique_listings[addr_key] = {
                     "tokens": item["tokens"],
@@ -153,17 +203,10 @@ def process():
                 }
             else:
                 # Waterfall merge tokens
-                # print(f"MATCH FOUND: Merging into [{addr_key}]")
-                
                 for k, v in item["tokens"].items():
                     if v.strip():
                         unique_listings[addr_key]["tokens"][k] = v
                 unique_listings[addr_key]["anchor_dt"] = item["anchor"].date()
-
-                # print("\n--- DEBUG: FINAL UNIQUE LISTINGS ---") 
-                # for k, v in unique_listings.items():
-                    # print(f"Key: {k} -> Final Viewing Token: {v['tokens']['viewing']}")
-                # print("--------------------------------------\n")
 
         # --- STATION 3: FINAL DATE LOGIC & ASSEMBLY ---
         final_results = []
@@ -171,6 +214,7 @@ def process():
             tokens, anchor_dt, status_dt = record["tokens"], record["anchor_dt"], record["status_dt"]
             view_string = tokens.get('viewing', '').lower()
             view_date = None
+
             # --- DATE LOGIC ---
             # Direct Numeric (Robust Version with Rollover)
             date_actual = re.search(r'(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?', view_string)
@@ -201,10 +245,13 @@ def process():
             if not view_date:
                 encl_pat = "|".join(ENCLITICS)
                 mth_pat = "|".join(MTH_IDX.keys())
+                
                 # Date Pattern A: "22nd of May"
                 mth_ID_A = re.search(rf'\b(\d+)(?:{encl_pat})?\s*(?:of\s*)?\b({mth_pat})[a-z]*\b', view_string, re.I)
+                
                 # Date Pattern B: "May 22nd"
                 mth_ID_B = re.search(rf'\b({mth_pat})[a-z]*\s*(\d+)(?:{encl_pat})?\b', view_string, re.I)
+    
                 if mth_ID_A:
                     v_day = int(mth_ID_A.group(1))
                     v_mth = MTH_IDX[mth_ID_A.group(2).lower()]
@@ -224,7 +271,7 @@ def process():
                         view_date = temp_date
                     except ValueError:
                         pass
-   
+
             # Relative Logic
             if not view_date:
                 if "tomorrow" in view_string:
@@ -242,7 +289,6 @@ def process():
                         view_date = anchor_dt + timedelta(days=days_ahead)
                         if pref == 'next' and anchor_dt.weekday() < target_weekday: 
                             view_date += timedelta(days=7)
-
             if view_date:
                 day_flag = "LIVE" if view_date >= status_dt else "PAST"
                 if day_flag != "PAST":
@@ -260,8 +306,8 @@ def process():
                     "DayFlag": "LIVE",
                     "sortDate": "1901/01/01"
                 })
-
         final_results.sort(key=lambda x: x["sortDate"])
+
         return make_response(json.dumps(final_results), 200, {"Content-Type": "application/json"})
 
     except Exception as e:
